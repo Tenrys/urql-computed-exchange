@@ -1,4 +1,11 @@
-import { ASTNode, DefinitionNode, DocumentNode, FieldNode, visit } from 'graphql';
+import {
+  ASTNode,
+  DefinitionNode,
+  DocumentNode,
+  FieldNode,
+  FragmentDefinitionNode,
+  visit,
+} from 'graphql';
 import flatten from 'lodash/flatten';
 
 import { Entities, NodeWithDirectives } from './types';
@@ -34,7 +41,7 @@ export function replaceDirectivesByFragments(
     return null;
   }
 
-  const replaceDirectiveByFragment = (node: FieldNode) => {
+  const replaceDirectiveByFragment = (node: FieldNode): FragmentDefinitionNode => {
     const computedDirective = node.directives?.find((d) => d.name.value === 'computed');
     const directiveType = getDirectiveType(computedDirective);
     const entityType = entities[directiveType];
@@ -53,16 +60,24 @@ export function replaceDirectivesByFragments(
     }
 
     // Replace directive node by fragment
-    return replaceDirectivesByFragments(entityField.dependencies?.definitions[0], entities);
+    const fragment = entityField.dependencies?.definitions[0] as FragmentDefinitionNode;
+    return replaceDirectivesByFragments(fragment, entities);
   };
 
-  return visit(query, {
+  const firstPass = visit(query, {
     Field(node) {
       if (!nodeHasComputedDirectives(node)) {
         return undefined; // Don't do anything with this node
       }
+      const fragment = replaceDirectiveByFragment(node);
+      return fragment.selectionSet.selections;
+    },
+  });
 
-      return replaceDirectiveByFragment(node);
+  return visit(firstPass, {
+    SelectionSet(node) {
+      node.selections = flatten(node.selections)
+      return node
     },
     Directive(node) {
       if (node.name.value === 'computed') {
@@ -81,7 +96,7 @@ export function addFragmentsFromDirectives(
     return null;
   }
 
-  const addFragmentToNode = (node: FieldNode) => {
+  const addFragmentToNode = (node: FieldNode): FragmentDefinitionNode => {
     const computedDirective = node.directives?.find((d) => d.name.value === 'computed');
     const directiveType = getDirectiveType(computedDirective);
     const entityType = entities[directiveType];
@@ -98,8 +113,8 @@ export function addFragmentsFromDirectives(
         `No resolver found for @computed directive "${fieldName}" in type "${directiveType}"`,
       );
     }
-
-    return addFragmentsFromDirectives(entityField.dependencies?.definitions[0], entities);
+    const fragment = entityField.dependencies?.definitions[0] as FragmentDefinitionNode;
+    return addFragmentsFromDirectives(fragment, entities);
   };
 
   const firstPass = visit(query, {
@@ -107,7 +122,8 @@ export function addFragmentsFromDirectives(
       if (!nodeHasComputedDirectives(node)) {
         return undefined; // Don't do anything with this node
       }
-      return [node, addFragmentToNode(node)];
+      const fragment = addFragmentToNode(node);
+      return [node, ...fragment.selectionSet.selections];
     },
   });
 
