@@ -4,8 +4,10 @@ import {
   DocumentNode,
   FieldNode,
   FragmentDefinitionNode,
+  SelectionNode,
   visit,
 } from 'graphql';
+import { mergeWith } from 'lodash';
 import flatten from 'lodash/flatten';
 
 import { Entities, NodeWithDirectives } from './types';
@@ -77,7 +79,34 @@ export function replaceDirectivesByFragments(
   return visit(firstPass, {
     SelectionSet(node) {
       node.selections = flatten(node.selections)
-      return node
+
+      const fields = node.selections
+        .filter(
+          (selection): selection is FieldNode =>
+            selection.kind === 'Field',
+        )
+        .reduce((acc, field) => {
+          const name = field.alias?.value || field.name.value;
+          acc[name] = [...(acc[name] || []), field];
+          return acc;
+        }, {} as Record<string, FieldNode[]>);
+
+      node.selections = [
+        ...node.selections.filter((selection): selection is SelectionNode =>
+          selection.kind !== 'Field',
+        ),
+        ...Object.values(fields).map((fields) =>
+          fields.reduce((acc, field) => {
+            return mergeWith(acc, field, (objValue, srcValue) => {
+              if (Array.isArray(objValue)) {
+                return objValue.concat(srcValue);
+              }
+            });
+          }, {} as FieldNode),
+        ),
+      ];
+
+      return node;
     },
     Directive(node) {
       if (node.name.value === 'computed') {
